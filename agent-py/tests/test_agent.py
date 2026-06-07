@@ -37,6 +37,24 @@ def test_profile_partial_extraction_and_dedup() -> None:
     assert "noise" not in p.skills
 
 
+def test_profile_collects_new_fields() -> None:
+    p = CareerProfile()
+    p.update("company_preferences", "startups, early-stage")
+    p.update("level", "senior")
+    p.update("desired_salary", "120k")
+    # List field splits + dedups; scalar fields store a single value.
+    assert p.company_preferences == ["startups", "early-stage"]
+    assert p.level == "senior"
+    assert p.desired_salary == "120k"
+    # Scalar fields overwrite on correction rather than appending.
+    p.update("level", "mid")
+    assert p.level == "mid"
+    d = p.to_dict()
+    assert d["company_preferences"] == ["startups", "early-stage"]
+    assert d["level"] == "mid"
+    assert d["desired_salary"] == "120k"
+
+
 def test_missing_fields_tracking() -> None:
     p = CareerProfile()
     missing = p.recompute_missing()

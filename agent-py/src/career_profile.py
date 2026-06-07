@@ -20,7 +20,11 @@ LIST_FIELDS = [
     "preferred_roles",
     "location_preferences",
     "work_preferences",
+    "company_preferences",
 ]
+
+# Scalar (single-value) fields are overwritten on update rather than appended to.
+SCALAR_FIELDS = ["name", "summary", "level", "desired_salary"]
 
 # The minimum set of fields we want before moving to recommendations. We don't
 # require ALL fields — phone calls are short and people get bored. Skills +
@@ -44,18 +48,21 @@ class CareerProfile:
     preferred_roles: list[str] = field(default_factory=list)
     location_preferences: list[str] = field(default_factory=list)
     work_preferences: list[str] = field(default_factory=list)
+    company_preferences: list[str] = field(default_factory=list)
+    level: str = ""
+    desired_salary: str = ""
     summary: str = ""
     missing_fields: list[str] = field(default_factory=list)
 
     def update(self, field_name: str, value) -> None:
         """Apply a partial extraction for a single field.
 
-        - Scalar fields (`name`, `summary`) are overwritten.
+        - Scalar fields (see `SCALAR_FIELDS`) are overwritten.
         - List fields are extended with de-duplicated, trimmed values.
         Unknown field names are ignored so a hallucinated tool arg can't crash
         the call.
         """
-        if field_name in ("name", "summary"):
+        if field_name in SCALAR_FIELDS:
             text = _as_text(value)
             if text:
                 setattr(self, field_name, text)

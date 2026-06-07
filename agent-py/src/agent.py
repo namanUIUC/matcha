@@ -1,8 +1,8 @@
 """Matcha — a phone-first voice career discovery agent.
 
-Matcha answers a phone call, runs a short career-discovery interview, builds a
-structured profile in real time, then recommends 3 career paths and 5 matching
-jobs — all spoken aloud over the call.
+Matcha answers a phone call, runs a short career-discovery interview, and builds a
+structured profile in real time. The actual role matching happens offline; Matcha
+tells the caller it will follow up and does not read recommendations aloud.
 
 Stack:
 - LiveKit Agents for telephony + voice orchestration
@@ -48,11 +48,6 @@ except ImportError:
 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from recommendations import (
-    format_recommendations_for_speech,
-    match_jobs,
-    recommend_roles,
-)
 from tts_setup import build_tts
 
 logger = logging.getLogger("agent")
@@ -99,62 +94,89 @@ MATCHA_INSTRUCTIONS = textwrap.dedent(
     """\
     You are Matcha, a focused career-intake INTERVIEWER on a phone call. You are
     NOT a generic chatbot or assistant. Your ONLY job is to run a structured
-    career-discovery interview: ask one question, listen, record the answer, then
-    ask the next question — until you have enough to recommend careers.
+    career-discovery interview: introduce yourself, get the caller's name, then
+    work through the questions below, recording each answer, until you have enough
+    to match the caller with careers.
+
+    # Opening (do this first, in order)
+    1. Introduce yourself and ask for the caller's name, for example:
+       "Hi, I'm Matcha, and I'm gonna match you to a job. No honestly, I help
+       people find their next role. Who am I talking with?"
+    2. When the caller gives their name, silently record it with
+       `update_profile(name, ...)`, then say: "Nice to talk to you, <name>. Tell
+       me a little about yourself."
+    3. Treat their reply to "tell me about yourself" as their self-introduction —
+       pull any facts from it (experience, skills, interests, ...) before moving
+       on to the flow.
 
     # Hard rules (follow every turn, no exceptions)
-    - Ask EXACTLY ONE question per turn. Never ask two questions at once.
     - Keep every reply to 1–2 short sentences. This is a phone call, not a lecture.
     - Do NOT chit-chat, give advice, explain concepts, or answer off-topic
       questions. If the caller goes off-topic, briefly acknowledge in one short
       phrase, then immediately ask the next interview question.
-    - Never repeat a question you already asked. Move forward through the flow.
+    - Don't re-ask something the caller already answered — always move forward
+      through the flow. The ONE exception: if you genuinely didn't understand the
+      answer, first briefly apologize and say you didn't catch it (e.g. "Sorry, I
+      didn't quite catch that"), THEN ask the same question again.
     - After EACH caller answer: silently call the `update_profile` tool for any
       new facts (one field per call), then ask the NEXT question in the flow.
     - Do not invent data. Record only what the caller actually said.
 
-    # Interview flow — ask in THIS ORDER, one question per turn
-    The greeting ("tell me about yourself") is already sent, so begin at step 1
-    after their first answer.
+    # Interview flow — ask in THIS ORDER, recording to the field(s) shown
+    If the caller already answered an upcoming question earlier (e.g. in their
+    intro), skip it and move on — never re-ask something you already know.
 
-    1. EXPERIENCE — "What experience do you have, and what kinds of work have you
-       done before?"
-    2. SKILLS — "What skills do you use most often, and which tools, languages, or
+    1. EXPERIENCE  → record as `experience`
+       "What experience do you have, and what kinds of work have you done before?"
+    2. SKILLS  → record as `skills`
+       "What skills do you use most often, and which tools, languages, or
        platforms are you most comfortable with?"
-    3. INTERESTS — "What kind of work do you enjoy most, and what industries or
-       company types interest you?"
-    4. LOCATION & WORK PREFERENCES — "Where are you looking to work, and are you
-       open to remote, hybrid, or in-person roles?"
-    5. ROLE & RESPONSIBILITY — "What kind of role are you looking for, and what do
-       you want to be doing day-to-day?"
-    6. JOB DESCRIPTIONS — "Have you seen any job postings recently that interested
-       you, and what did you like about them?"
-    7. COMPANY & CULTURE — "Do you prefer startups, established companies, or
-       something in between?"
-    8. LEVEL & GROWTH — "What level are you looking for, like junior, mid, or
-       senior?"
+    3. INTERESTS  → record as `interests`
+       "What kind of work do you enjoy most, and what industries or company types
+       interest you?"
+    4. LOCATION & WORK PREFERENCES  → record as `location_preferences` and
+       `work_preferences`
+       "Where are you looking to work, and are you open to remote, hybrid, or
+       in-person roles?"
+    5. EDUCATION  → record as `education`
+       "What level of education do you have? Tell me anything you think is
+       noteworthy about your education and related extracurriculars."
+    6. JOB DESCRIPTIONS  → record as `preferred_roles`
+       "Have you seen any job postings recently that interested you, and what did
+       you like about them?"
+    7. COMPANY & CULTURE  → record as `company_preferences`
+       "Do you prefer startups, established companies, or something in between?"
+    8. LEVEL & GROWTH  → record the level as `level` and any pay expectation as
+       `desired_salary`
+       "What level are you looking for, like junior, mid, or senior? And do you
+       have any idea how much you'd like to earn?"
 
-    Adapt wording naturally and use the caller's name once you know it, but keep
-    the same order and one-question-at-a-time rule.
+    Adapt wording naturally and use the caller's name once you know it.
 
-    # When to stop interviewing and give recommendations
-    Stop asking questions once EITHER:
-      - you have skills, interests, AND preferred roles recorded, OR
-      - the caller has answered about 5 to 7 questions.
-    Then do this, in order:
-      1. Say exactly: "Great, I have a good picture of you now. Based on what
-         you've told me, here are some career paths that might be a good fit."
-      2. Call the `deliver_recommendations` tool.
-      3. Read its returned text to the caller naturally: 3 career paths with short
-         reasons, then 5 matching job openings.
-      4. Close warmly: "Thanks for chatting with Matcha. Good luck with your
-         career search."
+    # When to stop interviewing and wrap up
+    You have enough once you've recorded skills, interests, AND preferred_roles
+    (`preferred_roles` comes from the JOB DESCRIPTIONS question). The remaining
+    questions — company & culture, level, and pay — are nice-to-have: ask them if
+    the caller is still engaged, but you may wrap up as soon as those three core
+    fields are recorded.
+    Then, in order:
+    1. Say exactly: "Great, I have a good picture of you now."
+    2. Tell the caller you'll do the matching on your side and call them back once
+       you find roles that are a strong fit, and that in the meantime you've
+       created a profile for them at matcha dot com where they can review and
+       manage their applications.
+    3. Do NOT read out job listings or career recommendations.
+    4. Close warmly, for example: "Thanks for chatting with Matcha. We're gonna
+       monitor open job positions and filter the best ones for you, and I'll call
+       you back once I'm done with my analysis. In the meantime I created you a
+       profile at matcha dot com — you can log in with your phone number to see
+       your matching job postings. Thank you, goodbye."
 
-    # Output format (voice/TTS)
+    # Output format (voice / TTS)
     - Plain spoken text only: no markdown, lists, JSON, emojis, or code.
     - Spell out numbers; never read tool names or internal details aloud.
-    - If you didn't understand, say "I'm not sure I caught that" and re-ask the
-      same question once.
+    - Say the website as "matcha dot com".
+    - Keep it warm, concise, and conversational.
     """
 )
 
@@ -171,7 +193,6 @@ class Matcha(Agent):
         self._room = room
         self._call_id = call_id
         self.profile = CareerProfile()
-        self._recommended = False
 
     # ------------------------------------------------------------------
     # Tools the LLM calls during the interview
@@ -187,9 +208,11 @@ class Matcha(Agent):
 
         Args:
             field: One of name, skills, experience, education, interests,
-                preferred_roles, location_preferences, work_preferences.
+                preferred_roles, location_preferences, work_preferences,
+                company_preferences, level, desired_salary.
             value: The value(s) to record. For list fields you may pass a
-                comma-separated string (e.g. "python, react, sql").
+                comma-separated string (e.g. "python, react, sql"). name, level,
+                and desired_salary hold a single value.
         """
         self.profile.update(field, value)
         self.profile.recompute_missing()
@@ -198,36 +221,6 @@ class Matcha(Agent):
         await self._publish_profile()
         self._write_debug_snapshot()
         return f"Recorded {field}."
-
-    @function_tool()
-    async def deliver_recommendations(self, context: RunContext) -> str:
-        """Compute and return spoken-ready career path + job recommendations.
-
-        Call this once you have enough of the caller's profile (at least skills,
-        interests, and preferred roles). Read the returned text to the caller,
-        then briefly explain why the matches fit.
-        """
-        roles = recommend_roles(self.profile, top_n=3)
-        categories = [r.category for r in roles]
-        jobs = match_jobs(self.profile, recommended_categories=categories, top_n=5)
-
-        speech = format_recommendations_for_speech(roles, jobs)
-        self._recommended = True
-
-        logger.info("=== RECOMMENDATIONS for call %s ===", self._call_id)
-        for r in roles:
-            logger.info("Role: %s (score %s) — %s", r.role, r.score, r.rationale)
-        for j in jobs:
-            logger.info(
-                "Job: %s @ %s (score %s)",
-                j.job.get("title"),
-                j.job.get("company"),
-                j.score,
-            )
-
-        await self._publish_recommendations(roles, jobs)
-        self._write_debug_snapshot(roles=roles, jobs=jobs)
-        return speech
 
     # ------------------------------------------------------------------
     # Debug surfaces: console logs, local JSON file, and data messages
@@ -265,29 +258,6 @@ class Matcha(Agent):
     async def _publish_profile(self) -> None:
         """Send the live profile to any connected frontend (optional debug UI)."""
         await self._publish({"type": "matcha_profile", "data": self.profile.to_dict()})
-
-    async def _publish_recommendations(self, roles, jobs) -> None:
-        await self._publish(
-            {
-                "type": "matcha_recommendations",
-                "data": {
-                    "roles": [
-                        {"role": r.role, "score": r.score, "rationale": r.rationale}
-                        for r in roles
-                    ],
-                    "jobs": [
-                        {
-                            "title": j.job.get("title"),
-                            "company": j.job.get("company"),
-                            "location": j.job.get("location"),
-                            "score": j.score,
-                            "reasons": j.reasons,
-                        }
-                        for j in jobs
-                    ],
-                },
-            }
-        )
 
     async def _publish(self, payload: dict) -> None:
         if self._room is None:
@@ -341,13 +311,14 @@ async def matcha_agent(ctx: JobContext):
 
     await ctx.connect()
 
-    # Matcha opens the call with a fixed greeting so the interview always starts
-    # the same way (deterministic — not left up to the LLM). session.say() speaks
-    # this exact text via TTS. After this, the LLM follows MATCHA_INSTRUCTIONS
-    # and runs the structured interview one question at a time.
-    await session.say(
-        "Hi, I'm Matcha. I help people discover career paths that really fit "
-        "who they are. To get started, can you tell me a little about yourself?"
+    # Matcha opens the call itself by following MATCHA_INSTRUCTIONS (introduce,
+    # then ask the caller's name), so the opening stays in sync with the prompt
+    # instead of a hardcoded greeting.
+    await session.generate_reply(
+        instructions=(
+            "Start the call now: greet the caller, introduce yourself as Matcha, "
+            "and ask for their name, following your opening instructions."
+        )
     )
 
 

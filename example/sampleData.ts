@@ -85,10 +85,9 @@ export const SAMPLE_JOBS: Job[] = [
 // ---------------------------------------------------------------------------
 // Sample candidates
 // ---------------------------------------------------------------------------
-// A diverse set used by `npm run compare` to exercise both engines. They're
+// A diverse set used by `npm run compare` to exercise the recommender. They're
 // intentionally varied in domain, location/remote preference, employment-type
-// flexibility, and salary floor — several are designed to make the LLM and the
-// semantic-search engine disagree (the interesting cases for review).
+// flexibility, and salary floor — covering distinct matching cases for review.
 
 export interface SampleCandidate {
   /** One-line description shown in the comparison report. */
@@ -98,7 +97,7 @@ export interface SampleCandidate {
 }
 
 // 1. Full-stack product engineer + AI. Hybrid-OK. Wants product, NOT infra —
-//    the classic case where semantic search wrongly likes a backend role.
+//    tests that a topically-similar backend role is correctly excluded.
 const priya: SampleCandidate = {
   description:
     "Senior full-stack product engineer (TS/React/Next/Convex) with 2 yrs of AI/LLM product work. SF, hybrid-OK, full-time, $170k+. Wants customer-facing product, explicitly not pure infra.",
@@ -212,7 +211,7 @@ const maya: SampleCandidate = {
 };
 
 // 3. Staff backend/data engineer who LIKES infra and on-call. Remote-only. The
-//    mirror image of Priya — both engines should agree here.
+//    mirror image of Priya — a clear, unambiguous infra match.
 const dev: SampleCandidate = {
   description:
     "Staff backend/data engineer (Go, Postgres, Snowflake, dbt). Remote-only, full-time, $180k+. Enjoys infra, pipelines, and on-call; avoids front-end/product UI.",
@@ -266,8 +265,8 @@ const dev: SampleCandidate = {
   ],
 };
 
-// 4. Enterprise AE, not technical. Hybrid-OK. Tests whether the engines confuse
-//    "Solutions Engineer" (technical sales) with a pure closing role.
+// 4. Enterprise AE, not technical. Hybrid-OK. Tests that "Solutions Engineer"
+//    (technical sales) is not confused with a pure closing role.
 const sara: SampleCandidate = {
   description:
     "Enterprise account executive, mid-market SaaS. Hybrid-OK, full-time, $150k+. Strong closer, explicitly not technical — a trap for the 'Solutions Engineer' role.",
@@ -320,8 +319,8 @@ const sara: SampleCandidate = {
   ],
 };
 
-// 5. Senior PM in the hiring/assessments domain. Hybrid-OK. Semantic search may
-//    pull engineering roles on "product" overlap; the LLM should hold the line.
+// 5. Senior PM in the hiring/assessments domain. Hybrid-OK. Tests that a PM is
+//    matched to the PM role, not to engineering roles on "product" overlap.
 const jordan: SampleCandidate = {
   description:
     "Senior product manager for B2B/assessment products. SF, hybrid-OK, full-time, $160k+. Roadmap owner, technical-enough but not an engineer.",

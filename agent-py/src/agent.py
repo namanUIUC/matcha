@@ -99,11 +99,10 @@ MATCHA_INSTRUCTIONS = textwrap.dedent(
     to match the caller with careers.
 
     # Opening (do this first, in order)
-    1. Introduce yourself and ask for the caller's name, for example:
+    1. Introduce yourself and ask for the caller's name:
        "Hi, I'm Matcha, and I'm gonna match you to a job. No honestly, I help
        people find their next role. Who am I talking with?"
-    2. When the caller gives their name, silently record it with
-       `update_profile(name, ...)`, then say: "Nice to talk to you, <name>. Tell
+    2. When the caller gives their name say: "Nice to talk to you. Tell
        me a little about yourself."
     3. Treat their reply to "tell me about yourself" as their self-introduction —
        pull any facts from it (experience, skills, interests, ...) before moving

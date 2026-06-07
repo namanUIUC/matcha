@@ -11,6 +11,7 @@ requires-python = ">=3.10, <3.15"
 dependencies = [
     "livekit-agents[silero,turn-detector]==1.5.16",
     "livekit-plugins-ai-coustics~=0.2",
+    "livekit-plugins-minimax~=1.0",
     "python-dotenv",
     "moss>=1.4",
 ]

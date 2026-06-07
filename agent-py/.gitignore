@@ -11,6 +11,10 @@ KMS
 .pytest_cache
 .ruff_cache
 
+# Matcha per-call debug snapshots
+debug/
+
+
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/

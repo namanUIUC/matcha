@@ -14,14 +14,16 @@ Run locally:   uv run python src/agent.py console
 Run for phone: uv run python src/agent.py dev   (then connect a dispatch rule)
 """
 
+import asyncio
 import json
 import logging
 import os
 import textwrap
 import uuid
+
+import httpx
 from datetime import datetime, timezone
 
-from career_profile import CareerProfile
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -37,6 +39,7 @@ from livekit.agents import (
 from livekit.plugins import silero
 from moss import DocumentInfo, MossClient, QueryOptions
 
+from career_profile import CareerProfile
 
 # Register the MiniMax TTS plugin on the MAIN THREAD at import time. LiveKit
 # requires plugins to be registered on the main thread; importing it here (not
@@ -50,11 +53,10 @@ except ImportError:
 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from recommendations import (
-    format_recommendations_for_speech,
-    match_jobs,
-    recommend_roles,
-)
+# Local Python matchers (recommendations.py) are no longer wired into the live
+# call — recommendations are computed in Convex via /api/recommend-jobs and
+# surfaced in the user's dashboard. The file is kept on disk for fallback /
+# debugging but is intentionally not imported here.
 from tts_setup import build_tts
 
 logger = logging.getLogger("agent")
@@ -83,6 +85,12 @@ MEMORY_INDEX = os.getenv("MOSS_MEMORY_INDEX_NAME", "memory")
 # fall back to a fixed id so the agent still runs.
 DEFAULT_USER_ID = "matcha-local"
 
+# Convex HTTP origin (e.g. https://<deployment>.convex.site). When set, we post
+# the final CareerProfile snapshot at the end of `deliver_recommendations`
+# so it lands in the canonical Convex `careerProfiles` row. Unset → skip.
+CONVEX_SITE_URL = os.getenv("CONVEX_SITE_URL")
+MATCHA_INGEST_SECRET = os.getenv("MATCHA_INGEST_SECRET")
+
 
 def check_required_env() -> None:
     """Fail fast with a clear message if core LiveKit env vars are missing.
@@ -106,67 +114,106 @@ def check_required_env() -> None:
 
 MATCHA_INSTRUCTIONS = textwrap.dedent(
     """\
-    You are Matcha, a focused career-intake INTERVIEWER on a phone call. You are
-    NOT a generic chatbot or assistant. Your ONLY job is to run a structured
-    career-discovery interview: ask one question, listen, record the answer, then
-    ask the next question — until you have enough to recommend careers.
+        You are Matcha, a focused career-intake INTERVIEWER on a phone call. You are
+        NOT a generic chatbot or assistant. Your ONLY job is to run a structured
+        career-discovery interview: introduce yourself, get the caller's name, then
+        work through the questions below, recording each answer, until you have enough
+        to match the caller with careers.
 
-    # Hard rules (follow every turn, no exceptions)
-    - Ask EXACTLY ONE question per turn. Never ask two questions at once.
-    - Keep every reply to 1–2 short sentences. This is a phone call, not a lecture.
-    - Do NOT chit-chat, give advice, explain concepts, or answer off-topic
-      questions. If the caller goes off-topic, briefly acknowledge in one short
-      phrase, then immediately ask the next interview question.
-    - Never repeat a question you already asked. Move forward through the flow.
-    - After EACH caller answer: silently call the `update_profile` tool for any
-      new facts (one field per call), then ask the NEXT question in the flow.
-    - Do not invent data. Record only what the caller actually said.
+        # Opening (do this first, in order)
+        1. Introduce yourself and ask for the caller's name:
+           "Hi, I'm Matcha, and I'm gonna match you to a job. No honestly, I help
+           people find their next role. Who am I talking with?"
+        2. When the caller gives their name say: "Nice to talk to you. Tell
+           me a little about yourself."
+        3. Treat their reply to "tell me about yourself" as their self-introduction —
+           pull any facts from it (experience, skills, interests, ...) before moving
+           on to the flow.
 
-    # Interview flow — ask in THIS ORDER, one question per turn
-    The greeting ("tell me about yourself") is already sent, so begin at step 1
-    after their first answer.
+        # Hard rules (follow every turn, no exceptions)
+        - Keep every reply to 1–2 short sentences. This is a phone call, not a lecture.
+        - Do NOT chit-chat, give advice, explain concepts, or answer off-topic
+          questions. If the caller goes off-topic, briefly acknowledge in one short
+          phrase, then immediately ask the next interview question.
+        - Don't re-ask something the caller already answered — always move forward
+          through the flow. The ONE exception: if you genuinely didn't understand the
+          answer, first briefly apologize and say you didn't catch it (e.g. "Sorry, I
+          didn't quite catch that"), THEN ask the same question again.
+        - After EACH caller answer: silently call the `update_profile` tool for any
+          new facts (one field per call), then ask the NEXT question in the flow.
+        - Do not invent data. Record only what the caller actually said.
 
-    1. EXPERIENCE — "What experience do you have, and what kinds of work have you
-       done before?"
-    2. SKILLS — "What skills do you use most often, and which tools, languages, or
-       platforms are you most comfortable with?"
-    3. INTERESTS — "What kind of work do you enjoy most, and what industries or
-       company types interest you?"
-    4. LOCATION & WORK PREFERENCES — "Where are you looking to work, and are you
-       open to remote, hybrid, or in-person roles?"
-    5. ROLE & RESPONSIBILITY — "What kind of role are you looking for, and what do
-       you want to be doing day-to-day?"
-    6. JOB DESCRIPTIONS — "Have you seen any job postings recently that interested
-       you, and what did you like about them?"
-    7. COMPANY & CULTURE — "Do you prefer startups, established companies, or
-       something in between?"
-    8. LEVEL & GROWTH — "What level are you looking for, like junior, mid, or
-       senior?"
+        # Interview flow — ask in THIS ORDER, recording to the field(s) shown
+        If the caller already answered an upcoming question earlier (e.g. in their
+        intro), skip it and move on — never re-ask something you already know.
 
-    Adapt wording naturally and use the caller's name once you know it, but keep
-    the same order and one-question-at-a-time rule.
+        1. EXPERIENCE  → record as `experience`
+           "What experience do you have, and what kinds of work have you done before?"
+        2. SKILLS  → record as `skills`
+           "What skills do you use most often, and which tools, languages, or
+           platforms are you most comfortable with?"
+        3. INTERESTS  → record as `interests`
+           "What kind of work do you enjoy most, and what industries or company types
+           interest you?"
+        4. LOCATION & WORK PREFERENCES  → record as `location_preferences` and
+           `work_preferences`
+           "Where are you looking to work, and are you open to remote, hybrid, or
+           in-person roles?"
+        5. EDUCATION  → record as `education`
+           "What level of education do you have? Tell me anything you think is
+           noteworthy about your education and related extracurriculars."
+        6. JOB DESCRIPTIONS  → record as `preferred_roles`
+           "Have you seen any job postings recently that interested you, and what did
+           you like about them?"
+        7. COMPANY & CULTURE  → record as `company_preferences`
+           "Do you prefer startups, established companies, or something in between?"
+        8. LEVEL & GROWTH  → record the level as `level` and any pay expectation as
+           `desired_salary`
+           "What level are you looking for, like junior, mid, or senior? And do you
+           have any idea how much you'd like to earn?"
 
-    # When to stop interviewing and give recommendations
-    Stop asking questions once EITHER:
-      - you have skills, interests, AND preferred roles recorded, OR
-      - the caller has answered about 5 to 7 questions.
-    Then do this, in order:
-      1. Say exactly: "Great, I have a good picture of you now. Based on what
-         you've told me, here are some career paths that might be a good fit."
-      2. Call the `deliver_recommendations` tool.
-      3. Read its returned text to the caller naturally: 3 career paths with short
-         reasons, then 5 matching job openings.
-      4. Close warmly: "Thanks for chatting with Matcha. Good luck with your
-         career search."
+        Adapt wording naturally and use the caller's name once you know it.
 
-    # Output format (voice/TTS)
-    - Plain spoken text only: no markdown, lists, JSON, emojis, or code.
-    - Spell out numbers; never read tool names or internal details aloud.
-    - If you didn't understand, say "I'm not sure I caught that" and re-ask the
-      same question once.
-    """
+        # When to stop interviewing and wrap up
+        You have enough once you've recorded skills, interests, AND preferred_roles.
+        The remaining questions (company & culture, level, pay) are nice-to-have —
+        ask them if the caller is engaged, but you can wrap up as soon as the three
+        core fields are recorded. Also wrap up if the caller is clearly disengaged
+        or wants to stop.
+
+        Speak EXACTLY ONE conclusion (no preamble + close), then call the
+        `end_call` tool. Do NOT read job listings or career recommendations.
+        Do NOT repeat or paraphrase your conclusion.
+
+        Pick the conclusion based on what you actually recorded:
+
+        - STRONG close — use this only when `skills`, `interests`, AND
+          `preferred_roles` are all recorded. Tell the caller you have what you
+          need, you'll match them against open roles in the background, and they
+          can log in at matcha dot com with their phone number to see their
+          matches on the dashboard. Then say a warm goodbye in the same breath.
+          Example: "Great, I've got what I need. I'm gonna match you against
+          open roles right now and drop the best ones on your dashboard at
+          matcha dot com — log in with your phone number any time. Thanks for
+          chatting with Matcha, talk soon."
+
+        - LIGHT close — use this when one or more of the three core fields is
+          still empty (e.g. caller is hanging up early or wasn't sure). Be
+          honest: tell them you didn't quite get enough to match them yet and
+          invite them to call back. Do NOT claim you created a profile or
+          generated matches. Example: "I didn't quite get enough to match you
+          to roles this time — call me back any time and we'll pick up where we
+          left off. Thanks, take care."
+
+        Immediately after the goodbye sentence, call `end_call` to hang up.
+
+        # Output format (voice / TTS)
+        - Plain spoken text only: no markdown, lists, JSON, emojis, or code.
+        - Spell out numbers; never read tool names or internal details aloud.
+        - Say the website as "matcha dot com".
+        - Keep it warm, concise, and conversational.
+        """
 )
-
 
 
 class Matcha(Agent):
@@ -176,6 +223,7 @@ class Matcha(Agent):
         self,
         *,
         room=None,
+        job_ctx: JobContext | None = None,
         call_id: str = "local",
         user_id: str = DEFAULT_USER_ID,
     ) -> None:
@@ -184,10 +232,12 @@ class Matcha(Agent):
             instructions=MATCHA_INSTRUCTIONS,
         )
         self._room = room
+        self._job_ctx = job_ctx
         self._call_id = call_id
         self._user_id = user_id
         self.profile = CareerProfile()
         self._recommended = False
+        self._convex_triggered = False
 
         # Moss is optional: if credentials are missing, the memory tools no-op
         # and the rest of the interview still works.
@@ -277,13 +327,119 @@ class Matcha(Agent):
         except Exception:
             logger.exception("Failed to index fact to Moss")
 
+    async def _post_profile_snapshot(self) -> None:
+        """POST the final CareerProfile snapshot to Convex.
+
+        Skips silently in console mode (no real phone number) and when
+        `CONVEX_SITE_URL` isn't configured. Called from
+        `_fetch_job_recommendations_from_convex` and from the shutdown
+        callback in the entrypoint as a fallback for early hangups.
+        """
+        logger.info(
+            "[convex] profile snapshot requested — user_id=%s call_id=%s CONVEX_SITE_URL=%s INGEST_SECRET=%s",
+            self._user_id,
+            self._call_id,
+            "set" if CONVEX_SITE_URL else "unset",
+            "set" if MATCHA_INGEST_SECRET else "unset",
+        )
+        if not CONVEX_SITE_URL:
+            logger.warning("[convex] skipping POST: CONVEX_SITE_URL not configured")
+            return
+        if not self._user_id.startswith("+"):
+            # E.164 phone numbers always start with `+`. Skip console / fallback
+            # ids so we don't pollute Convex with sentinel rows.
+            logger.warning(
+                "[convex] skipping POST: user_id %s does not look like an E.164 phone number",
+                self._user_id,
+            )
+            return
+
+        payload = dict(self.profile.to_dict())
+        payload["phone_number"] = self._user_id
+
+        headers = {"Content-Type": "application/json"}
+        if MATCHA_INGEST_SECRET:
+            headers["x-matcha-secret"] = MATCHA_INGEST_SECRET
+
+        url = f"{CONVEX_SITE_URL.rstrip('/')}/api/career-profile"
+        logger.info(
+            "[convex] POST %s — keys=%s len(payload)=%d",
+            url,
+            sorted(payload.keys()),
+            len(json.dumps(payload)),
+        )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                logger.info(
+                    "[convex] /api/career-profile responded status=%s body=%s",
+                    response.status_code,
+                    response.text[:500],
+                )
+                if response.status_code >= 400:
+                    logger.error(
+                        "[convex] profile snapshot POST failed: %s %s",
+                        response.status_code,
+                        response.text,
+                    )
+        except Exception:
+            logger.exception("[convex] /api/career-profile request raised")
+
+    async def _trigger_convex_job_recommendations(self, top_n: int = 3) -> None:
+        """Fire-and-forget: upsert profile + ask Convex to compute recs.
+
+        The agent doesn't speak the result — recommendations land in the
+        `jobRecommendations` table and surface in the user's dashboard. We log
+        the response for visibility but don't return anything to the caller,
+        so callers should kick this off via `asyncio.create_task` and move on.
+        """
+        if self._convex_triggered:
+            logger.info("[convex] recommend-jobs already triggered — skipping")
+            return
+        self._convex_triggered = True
+
+        logger.info(
+            "[convex] recommend-jobs trigger — user_id=%s top_n=%d",
+            self._user_id,
+            top_n,
+        )
+        if not CONVEX_SITE_URL:
+            logger.warning("[convex] skipping recommend-jobs: CONVEX_SITE_URL unset")
+            return
+        if not self._user_id.startswith("+"):
+            logger.warning(
+                "[convex] skipping recommend-jobs: user_id %s is not an E.164 phone",
+                self._user_id,
+            )
+            return
+
+        # Profile must exist before the recommend endpoint can score it.
+        await self._post_profile_snapshot()
+
+        headers = {"Content-Type": "application/json"}
+        if MATCHA_INGEST_SECRET:
+            headers["x-matcha-secret"] = MATCHA_INGEST_SECRET
+
+        url = f"{CONVEX_SITE_URL.rstrip('/')}/api/recommend-jobs"
+        payload = {"phone_number": self._user_id, "top_n": top_n}
+        logger.info("[convex] POST %s — payload=%s", url, payload)
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+            logger.info(
+                "[convex] /api/recommend-jobs responded status=%s body=%s",
+                response.status_code,
+                response.text[:500],
+            )
+        except Exception:
+            logger.exception("[convex] /api/recommend-jobs request raised")
+
     # ------------------------------------------------------------------
     # Tools the LLM calls during the interview
     # ------------------------------------------------------------------
     @function_tool()
-    async def update_profile(
-        self, context: RunContext, field: str, value: str
-    ) -> str:
+    async def update_profile(self, context: RunContext, field: str, value: str) -> str:
         """Record a fact the caller shared into their career profile.
 
         Call this after each answer for any new information you heard. Extract
@@ -307,34 +463,32 @@ class Matcha(Agent):
         return f"Recorded {field}."
 
     @function_tool()
-    async def deliver_recommendations(self, context: RunContext) -> str:
-        """Compute and return spoken-ready career path + job recommendations.
-
-        Call this once you have enough of the caller's profile (at least skills,
-        interests, and preferred roles). Read the returned text to the caller,
-        then briefly explain why the matches fit.
+    async def end_call(self, context: RunContext) -> str:
+        """End the phone call. Call this EXACTLY ONCE, immediately after your
+        final goodbye line. Do not say anything after invoking this tool — the
+        line will be torn down.
         """
-        roles = recommend_roles(self.profile, top_n=3)
-        categories = [r.category for r in roles]
-        jobs = match_jobs(self.profile, recommended_categories=categories, top_n=5)
-
-        speech = format_recommendations_for_speech(roles, jobs)
-        self._recommended = True
-
-        logger.info("=== RECOMMENDATIONS for call %s ===", self._call_id)
-        for r in roles:
-            logger.info("Role: %s (score %s) — %s", r.role, r.score, r.rationale)
-        for j in jobs:
-            logger.info(
-                "Job: %s @ %s (score %s)",
-                j.job.get("title"),
-                j.job.get("company"),
-                j.score,
-            )
-
-        await self._publish_recommendations(roles, jobs)
-        self._write_debug_snapshot(roles=roles, jobs=jobs)
-        return speech
+        logger.info("[end_call] tool invoked — scheduling room teardown")
+        # Kick off the Convex hand-off in the background so the user's
+        # dashboard fills in even if `deliver_recommendations` was never used.
+        try:
+            asyncio.create_task(self._trigger_convex_job_recommendations())
+        except Exception:
+            logger.exception("[end_call] failed to schedule convex trigger")
+        # Give TTS a beat to finish speaking the goodbye before deleting the
+        # room — TTS playout runs slightly behind the LLM tool call.
+        await asyncio.sleep(2.5)
+        if self._job_ctx is not None:
+            try:
+                fut = self._job_ctx.delete_room()
+                if fut is not None:
+                    await fut
+                logger.info("[end_call] room deletion submitted")
+            except Exception:
+                logger.exception("[end_call] delete_room failed")
+        else:
+            logger.warning("[end_call] no JobContext available; cannot delete room")
+        return ""
 
     @function_tool()
     async def remember_fact(self, context: RunContext, fact: str) -> str:
@@ -422,29 +576,6 @@ class Matcha(Agent):
         """Send the live profile to any connected frontend (optional debug UI)."""
         await self._publish({"type": "matcha_profile", "data": self.profile.to_dict()})
 
-    async def _publish_recommendations(self, roles, jobs) -> None:
-        await self._publish(
-            {
-                "type": "matcha_recommendations",
-                "data": {
-                    "roles": [
-                        {"role": r.role, "score": r.score, "rationale": r.rationale}
-                        for r in roles
-                    ],
-                    "jobs": [
-                        {
-                            "title": j.job.get("title"),
-                            "company": j.job.get("company"),
-                            "location": j.job.get("location"),
-                            "score": j.score,
-                            "reasons": j.reasons,
-                        }
-                        for j in jobs
-                    ],
-                },
-            }
-        )
-
     async def _publish(self, payload: dict) -> None:
         if self._room is None:
             return
@@ -482,7 +613,7 @@ async def matcha_agent(ctx: JobContext):
     # We don't know the caller's phone number yet — it arrives as a SIP
     # participant attribute after `ctx.connect()`. Start with the fallback id
     # and update Matcha once the participant joins.
-    matcha = Matcha(room=ctx.room, call_id=call_id)
+    matcha = Matcha(room=ctx.room, job_ctx=ctx, call_id=call_id)
 
     session = AgentSession(
         # STT via LiveKit Inference (the agent's ears).
@@ -510,15 +641,56 @@ async def matcha_agent(ctx: JobContext):
     prior_facts: list[str] = []
     try:
         participant = await ctx.wait_for_participant()
+        logger.info(
+            "[sip] participant joined identity=%s kind=%s attributes=%s",
+            getattr(participant, "identity", None),
+            getattr(participant, "kind", None),
+            dict(getattr(participant, "attributes", {}) or {}),
+        )
         phone_number = participant.attributes.get("sip.phoneNumber")
         # In console mode the participant is a MagicMock, so `attributes.get`
         # also returns a MagicMock — type-check before using it as an id. When
         # we can't resolve a real phone number we keep DEFAULT_USER_ID so
         # repeat console sessions still exercise the returning-caller path.
         if isinstance(phone_number, str) and phone_number:
+            logger.info("[sip] resolved phone_number=%s", phone_number)
             matcha.set_user_id(phone_number)
+        else:
+            logger.warning(
+                "[sip] no usable sip.phoneNumber attribute; raw=%r — using fallback user_id=%s",
+                phone_number,
+                matcha._user_id,
+            )
     except Exception:
         logger.exception("Failed to read caller phone number from SIP attributes")
+
+    # Safety net: if the call ends BEFORE `deliver_recommendations` fires, we
+    # still want the latest CareerProfile snapshot to land in Convex. The
+    # shutdown callback runs on session/room teardown.
+    async def _on_shutdown() -> None:
+        logger.info(
+            "[shutdown] callback firing — user_id=%s convex_triggered=%s",
+            matcha._user_id,
+            matcha._convex_triggered,
+        )
+        if matcha._convex_triggered:
+            # Either the `end_call` tool or a prior path already kicked off
+            # the Convex POST + recommend-jobs trigger.
+            return
+        # Fire-and-forget — we don't want the room teardown to wait on Convex
+        # round-trips. The task lives long enough to complete because the LK
+        # runtime keeps the event loop alive through pending tasks.
+        try:
+            asyncio.create_task(matcha._trigger_convex_job_recommendations())
+            logger.info("[shutdown] scheduled convex hand-off")
+        except Exception:
+            logger.exception("[shutdown] failed to schedule convex hand-off")
+
+    try:
+        ctx.add_shutdown_callback(_on_shutdown)
+        logger.info("[shutdown] registered profile-snapshot fallback")
+    except Exception:
+        logger.exception("Failed to register shutdown callback")
 
     # Always attempt the recall — for real calls this is filtered to the
     # phone number; for console mode it uses DEFAULT_USER_ID so prior
@@ -565,7 +737,6 @@ async def matcha_agent(ctx: JobContext):
             "fit who they are. To get started, can you tell me a little about "
             "yourself?"
         )
-
 
 
 if __name__ == "__main__":

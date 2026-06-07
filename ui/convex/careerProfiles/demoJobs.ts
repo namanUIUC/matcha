@@ -1,222 +1,354 @@
-[
+export type DemoJob = {
+  externalId: string;
+  title: string;
+  company: string;
+  location: string;
+  remoteType?: string;
+  skills?: string[];
+  description?: string;
+  roleCategory?: string;
+  experienceLevel?: string;
+};
+
+export const DEMO_JOBS: DemoJob[] = [
   {
-    "id": "job_001",
+    "externalId": "job_001",
     "title": "Solutions Engineer",
     "company": "Northwind Cloud",
     "location": "San Francisco, CA",
     "remoteType": "hybrid",
-    "skills": ["javascript", "apis", "customer-facing", "demos", "cloud"],
+    "skills": [
+      "javascript",
+      "apis",
+      "customer-facing",
+      "demos",
+      "cloud"
+    ],
     "description": "Partner with sales to run technical demos and guide enterprise customers through integrations.",
     "roleCategory": "solutions_engineer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_002",
+    "externalId": "job_002",
     "title": "Developer Advocate",
     "company": "Streamline Labs",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["public speaking", "community", "javascript", "content", "developer tools"],
+    "skills": [
+      "public speaking",
+      "community",
+      "javascript",
+      "content",
+      "developer tools"
+    ],
     "description": "Create demos, write tutorials, and speak at events to grow our developer community.",
     "roleCategory": "developer_advocate",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_003",
+    "externalId": "job_003",
     "title": "Technical Account Manager",
     "company": "Atlas SaaS",
     "location": "Austin, TX",
     "remoteType": "hybrid",
-    "skills": ["saas", "onboarding", "implementation", "account management", "customer success"],
+    "skills": [
+      "saas",
+      "onboarding",
+      "implementation",
+      "account management",
+      "customer success"
+    ],
     "description": "Own post-sale relationships, drive onboarding, and ensure customers see value quickly.",
     "roleCategory": "technical_account_manager",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_004",
+    "externalId": "job_004",
     "title": "AI Consultant",
     "company": "Lumen Advisory",
     "location": "New York, NY",
     "remoteType": "hybrid",
-    "skills": ["ai", "automation", "business process", "python", "consulting"],
+    "skills": [
+      "ai",
+      "automation",
+      "business process",
+      "python",
+      "consulting"
+    ],
     "description": "Help enterprises identify and implement AI automation across business processes.",
     "roleCategory": "ai_consultant",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_005",
+    "externalId": "job_005",
     "title": "Customer Success Engineer",
     "company": "Beacon Software",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["support", "product", "enterprise", "troubleshooting", "apis"],
+    "skills": [
+      "support",
+      "product",
+      "enterprise",
+      "troubleshooting",
+      "apis"
+    ],
     "description": "Be the technical partner for enterprise clients, resolving issues and driving adoption.",
     "roleCategory": "customer_success_engineer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_006",
+    "externalId": "job_006",
     "title": "Sales Engineer",
     "company": "Vertex Systems",
     "location": "Chicago, IL",
     "remoteType": "in-person",
-    "skills": ["technical demos", "selling", "presentations", "cloud", "customer-facing"],
+    "skills": [
+      "technical demos",
+      "selling",
+      "presentations",
+      "cloud",
+      "customer-facing"
+    ],
     "description": "Run technical demos and proofs-of-concept to close enterprise deals alongside AEs.",
     "roleCategory": "sales_engineer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_007",
+    "externalId": "job_007",
     "title": "Frontend Engineer",
     "company": "Pixel Forge",
     "location": "Remote (Global)",
     "remoteType": "remote",
-    "skills": ["react", "typescript", "css", "ui", "frontend"],
+    "skills": [
+      "react",
+      "typescript",
+      "css",
+      "ui",
+      "frontend"
+    ],
     "description": "Build polished, accessible web interfaces for a fast-growing design platform.",
     "roleCategory": "software_engineer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_008",
+    "externalId": "job_008",
     "title": "Backend Engineer",
     "company": "Cinder Data",
     "location": "Seattle, WA",
     "remoteType": "hybrid",
-    "skills": ["python", "apis", "databases", "backend", "cloud"],
+    "skills": [
+      "python",
+      "apis",
+      "databases",
+      "backend",
+      "cloud"
+    ],
     "description": "Design and scale backend services and data pipelines for analytics products.",
     "roleCategory": "software_engineer",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_009",
+    "externalId": "job_009",
     "title": "Data Analyst",
     "company": "Harbor Analytics",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["sql", "data", "dashboards", "excel", "analytics"],
+    "skills": [
+      "sql",
+      "data",
+      "dashboards",
+      "excel",
+      "analytics"
+    ],
     "description": "Turn raw data into dashboards and insights for product and ops teams.",
     "roleCategory": "data_analyst",
     "experienceLevel": "junior"
   },
   {
-    "id": "job_010",
+    "externalId": "job_010",
     "title": "Product Manager",
     "company": "Northwind Cloud",
     "location": "San Francisco, CA",
     "remoteType": "hybrid",
-    "skills": ["product", "roadmap", "customer-facing", "strategy", "communication"],
+    "skills": [
+      "product",
+      "roadmap",
+      "customer-facing",
+      "strategy",
+      "communication"
+    ],
     "description": "Own the roadmap for a developer-facing product line from discovery to launch.",
     "roleCategory": "product_manager",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_011",
+    "externalId": "job_011",
     "title": "UX Designer",
     "company": "Pixel Forge",
     "location": "Remote (Global)",
     "remoteType": "remote",
-    "skills": ["design", "figma", "user research", "prototyping", "creative"],
+    "skills": [
+      "design",
+      "figma",
+      "user research",
+      "prototyping",
+      "creative"
+    ],
     "description": "Design intuitive flows and prototypes for a collaborative creative tool.",
     "roleCategory": "designer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_012",
+    "externalId": "job_012",
     "title": "DevRel Engineer",
     "company": "Streamline Labs",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["developer tools", "demos", "public speaking", "javascript", "community"],
+    "skills": [
+      "developer tools",
+      "demos",
+      "public speaking",
+      "javascript",
+      "community"
+    ],
     "description": "Bridge product and community with sample apps, talks, and developer feedback loops.",
     "roleCategory": "developer_advocate",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_013",
+    "externalId": "job_013",
     "title": "Product Designer",
     "company": "Atlas SaaS",
     "location": "Austin, TX",
     "remoteType": "hybrid",
-    "skills": ["figma", "design systems", "interaction design", "user research", "prototyping"],
+    "skills": [
+      "figma",
+      "design systems",
+      "interaction design",
+      "user research",
+      "prototyping"
+    ],
     "description": "Own end-to-end product design for our admin and reporting surfaces, partnering closely with PM and engineering.",
     "roleCategory": "designer",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_014",
+    "externalId": "job_014",
     "title": "Machine Learning Engineer",
     "company": "Lumen Advisory",
     "location": "New York, NY",
     "remoteType": "hybrid",
-    "skills": ["python", "ai", "machine learning", "automation", "data"],
+    "skills": [
+      "python",
+      "ai",
+      "machine learning",
+      "automation",
+      "data"
+    ],
     "description": "Build and deploy ML models that automate document and workflow processing.",
     "roleCategory": "ai_consultant",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_015",
+    "externalId": "job_015",
     "title": "UX Researcher",
     "company": "Beacon Software",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["user research", "usability testing", "qualitative research", "synthesis", "figma"],
+    "skills": [
+      "user research",
+      "usability testing",
+      "qualitative research",
+      "synthesis",
+      "figma"
+    ],
     "description": "Run mixed-methods research studies to shape the product roadmap and validate new design directions.",
     "roleCategory": "designer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_016",
+    "externalId": "job_016",
     "title": "Enterprise Account Executive",
     "company": "Vertex Systems",
     "location": "Chicago, IL",
     "remoteType": "in-person",
-    "skills": ["selling", "presentations", "negotiation", "customer-facing", "saas"],
+    "skills": [
+      "selling",
+      "presentations",
+      "negotiation",
+      "customer-facing",
+      "saas"
+    ],
     "description": "Close net-new enterprise SaaS deals and grow strategic accounts.",
     "roleCategory": "sales_engineer",
     "experienceLevel": "senior"
   },
   {
-    "id": "job_017",
+    "externalId": "job_017",
     "title": "Brand Designer",
     "company": "Cinder Data",
     "location": "Seattle, WA",
     "remoteType": "hybrid",
-    "skills": ["brand", "illustration", "figma", "typography", "creative"],
+    "skills": [
+      "brand",
+      "illustration",
+      "figma",
+      "typography",
+      "creative"
+    ],
     "description": "Define and evolve our visual identity across the website, product, and marketing campaigns.",
     "roleCategory": "designer",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_018",
+    "externalId": "job_018",
     "title": "Growth Marketing Manager",
     "company": "Harbor Analytics",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["marketing", "content", "analytics", "communication", "strategy"],
+    "skills": [
+      "marketing",
+      "content",
+      "analytics",
+      "communication",
+      "strategy"
+    ],
     "description": "Drive top-of-funnel growth through content, experiments, and lifecycle campaigns.",
     "roleCategory": "marketing",
     "experienceLevel": "mid"
   },
   {
-    "id": "job_019",
+    "externalId": "job_019",
     "title": "Junior Software Engineer",
     "company": "Pixel Forge",
     "location": "Remote (Global)",
     "remoteType": "remote",
-    "skills": ["javascript", "react", "frontend", "git", "apis"],
+    "skills": [
+      "javascript",
+      "react",
+      "frontend",
+      "git",
+      "apis"
+    ],
     "description": "Learn and grow while shipping features on a supportive, mentorship-focused team.",
     "roleCategory": "software_engineer",
     "experienceLevel": "junior"
   },
   {
-    "id": "job_020",
+    "externalId": "job_020",
     "title": "Solutions Architect",
     "company": "Northwind Cloud",
     "location": "Remote (US)",
     "remoteType": "remote",
-    "skills": ["cloud", "architecture", "apis", "customer-facing", "consulting"],
+    "skills": [
+      "cloud",
+      "architecture",
+      "apis",
+      "customer-facing",
+      "consulting"
+    ],
     "description": "Design scalable cloud architectures with enterprise customers and pre-sales teams.",
     "roleCategory": "solutions_engineer",
     "experienceLevel": "senior"
   }
-]
+];

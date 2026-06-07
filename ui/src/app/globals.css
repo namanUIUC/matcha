@@ -1,0 +1,103 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: #ffffff;
+  --foreground: #252525;
+
+  /* Casuro brand colors */
+  --color-casuro-dark: #10121A;
+  --color-casuro-orange: #FD4B22;
+  --color-casuro-blue: #1676D8;
+  --color-casuro-green: #009262;
+  --color-casuro-cyan: #7ECBD9;
+  --color-casuro-yellow: #FEB300;
+  --color-casuro-muted: #F0F4F9;
+
+  --card: #ffffff;
+  --card-foreground: #252525;
+  --popover: #ffffff;
+  --popover-foreground: #252525;
+  --primary: #343434;
+  --primary-foreground: #fcfcfc;
+  --secondary: #f8f8f8;
+  --secondary-foreground: #343434;
+  --muted: #f8f8f8;
+  --muted-foreground: #8e8e8e;
+  --accent: #f8f8f8;
+  --accent-foreground: #343434;
+  --destructive: #dc2626;
+  --border: #ebebeb;
+  --input: #ebebeb;
+  --ring: #b5b5b5;
+}
+
+.dark {
+  --background: #252525;
+  --foreground: #fcfcfc;
+  --card: #343434;
+  --card-foreground: #fcfcfc;
+  --popover: #343434;
+  --popover-foreground: #fcfcfc;
+  --primary: #ebebeb;
+  --primary-foreground: #343434;
+  --secondary: #444444;
+  --secondary-foreground: #fcfcfc;
+  --muted: #444444;
+  --muted-foreground: #b5b5b5;
+  --accent: #444444;
+  --accent-foreground: #fcfcfc;
+  --destructive: #ef4444;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.15);
+  --ring: #8e8e8e;
+}
+
+@theme inline {
+  --color-casuro-dark: var(--color-casuro-dark);
+  --color-casuro-orange: var(--color-casuro-orange);
+  --color-casuro-blue: var(--color-casuro-blue);
+  --color-casuro-green: var(--color-casuro-green);
+  --color-casuro-cyan: var(--color-casuro-cyan);
+  --color-casuro-yellow: var(--color-casuro-yellow);
+  --color-casuro-muted: var(--color-casuro-muted);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

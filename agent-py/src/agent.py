@@ -20,7 +20,6 @@ import os
 import textwrap
 from datetime import datetime, timezone
 
-from career_profile import CareerProfile
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -35,6 +34,7 @@ from livekit.agents import (
 )
 from livekit.plugins import silero
 
+from career_profile import CareerProfile
 
 # Register the MiniMax TTS plugin on the MAIN THREAD at import time. LiveKit
 # requires plugins to be registered on the main thread; importing it here (not
@@ -48,6 +48,7 @@ except ImportError:
 
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from llm_recommend import LlmMatchError, llm_match_jobs
 from recommendations import (
     format_recommendations_for_speech,
     match_jobs,
@@ -159,7 +160,6 @@ MATCHA_INSTRUCTIONS = textwrap.dedent(
 )
 
 
-
 class Matcha(Agent):
     """The Matcha career interview agent. Holds the in-memory profile."""
 
@@ -177,9 +177,7 @@ class Matcha(Agent):
     # Tools the LLM calls during the interview
     # ------------------------------------------------------------------
     @function_tool()
-    async def update_profile(
-        self, context: RunContext, field: str, value: str
-    ) -> str:
+    async def update_profile(self, context: RunContext, field: str, value: str) -> str:
         """Record a fact the caller shared into their career profile.
 
         Call this after each answer for any new information you heard. Extract
@@ -209,12 +207,17 @@ class Matcha(Agent):
         """
         roles = recommend_roles(self.profile, top_n=3)
         categories = [r.category for r in roles]
-        jobs = match_jobs(self.profile, recommended_categories=categories, top_n=5)
+        transcript = self._extract_transcript()
+        jobs, engine = self._match_jobs_with_fallback(categories, transcript)
 
         speech = format_recommendations_for_speech(roles, jobs)
         self._recommended = True
 
-        logger.info("=== RECOMMENDATIONS for call %s ===", self._call_id)
+        logger.info(
+            "=== RECOMMENDATIONS for call %s (job matcher: %s) ===",
+            self._call_id,
+            engine,
+        )
         for r in roles:
             logger.info("Role: %s (score %s) — %s", r.role, r.score, r.rationale)
         for j in jobs:
@@ -225,14 +228,83 @@ class Matcha(Agent):
                 j.score,
             )
 
-        await self._publish_recommendations(roles, jobs)
-        self._write_debug_snapshot(roles=roles, jobs=jobs)
+        await self._publish_recommendations(roles, jobs, engine=engine)
+        self._write_debug_snapshot(roles=roles, jobs=jobs, engine=engine)
         return speech
+
+    # ------------------------------------------------------------------
+    # Job matching: LLM rank-and-explain, with keyword fallback
+    # ------------------------------------------------------------------
+    def _match_jobs_with_fallback(
+        self, categories: list[str], transcript: list[dict]
+    ) -> tuple[list, str]:
+        """Rank jobs with the LLM matcher, falling back to the keyword matcher.
+
+        Returns ``(matches, engine)`` where ``engine`` is ``"llm"`` or
+        ``"keyword_fallback"``. The fallback fires on any LLM error/timeout OR
+        when the LLM returns nothing above the relevance bar — and is always
+        logged loudly so it's obvious which engine produced the result.
+        """
+        try:
+            matches = llm_match_jobs(
+                self.profile.to_dict(), transcript=transcript, top_n=5
+            )
+            if matches:
+                logger.info(
+                    "✓ Job matcher: LLM rank-and-explain (%d matches)", len(matches)
+                )
+                return matches, "llm"
+            logger.warning(
+                "⚠ LLM matcher returned no jobs above the relevance bar "
+                "— using KEYWORD FALLBACK"
+            )
+        except LlmMatchError as e:
+            logger.warning("⚠ LLM matcher unavailable (%s) — using KEYWORD FALLBACK", e)
+        except Exception:
+            logger.exception("⚠ LLM matcher crashed — using KEYWORD FALLBACK")
+
+        matches = match_jobs(self.profile, recommended_categories=categories, top_n=5)
+        return matches, "keyword_fallback"
+
+    def _extract_transcript(self) -> list[dict]:
+        """Pull the conversation so far into ``[{role, text}]`` for the matcher.
+
+        UNVERIFIED: the chat-history API can change across livekit-agents
+        versions — verify against https://docs.livekit.io. We read defensively
+        and fall back to an empty transcript (profile-only matching) on any error,
+        so a changed API degrades gracefully rather than breaking the call.
+        """
+        turns: list[dict] = []
+        try:
+            chat_ctx = getattr(self, "chat_ctx", None)
+            for item in getattr(chat_ctx, "items", None) or []:
+                role = getattr(item, "role", None)
+                if role not in ("user", "assistant"):
+                    continue
+                text = getattr(item, "text_content", None)
+                if callable(text):
+                    text = text()
+                if not text:
+                    content = getattr(item, "content", None)
+                    if isinstance(content, list):
+                        text = " ".join(c for c in content if isinstance(c, str))
+                    elif isinstance(content, str):
+                        text = content
+                if text:
+                    turns.append(
+                        {
+                            "role": "agent" if role == "assistant" else "user",
+                            "text": text,
+                        }
+                    )
+        except Exception:
+            logger.exception("Failed to extract transcript; matching on profile only")
+        return turns
 
     # ------------------------------------------------------------------
     # Debug surfaces: console logs, local JSON file, and data messages
     # ------------------------------------------------------------------
-    def _write_debug_snapshot(self, roles=None, jobs=None) -> None:
+    def _write_debug_snapshot(self, roles=None, jobs=None, engine=None) -> None:
         """Write the current profile (+ optional recs) to a local JSON file."""
         try:
             os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -241,6 +313,10 @@ class Matcha(Agent):
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "profile": self.profile.to_dict(),
             }
+            if engine is not None:
+                # Which job matcher produced these results: "llm" or
+                # "keyword_fallback". Makes fallback usage visible in the snapshot.
+                snapshot["job_matcher_engine"] = engine
             if roles is not None:
                 snapshot["recommended_roles"] = [
                     {"role": r.role, "score": r.score, "rationale": r.rationale}
@@ -266,11 +342,13 @@ class Matcha(Agent):
         """Send the live profile to any connected frontend (optional debug UI)."""
         await self._publish({"type": "matcha_profile", "data": self.profile.to_dict()})
 
-    async def _publish_recommendations(self, roles, jobs) -> None:
+    async def _publish_recommendations(self, roles, jobs, engine: str = "llm") -> None:
         await self._publish(
             {
                 "type": "matcha_recommendations",
                 "data": {
+                    # "llm" or "keyword_fallback" — lets the UI badge the source.
+                    "engine": engine,
                     "roles": [
                         {"role": r.role, "score": r.score, "rationale": r.rationale}
                         for r in roles
@@ -349,7 +427,6 @@ async def matcha_agent(ctx: JobContext):
         "Hi, I'm Matcha. I help people discover career paths that really fit "
         "who they are. To get started, can you tell me a little about yourself?"
     )
-
 
 
 if __name__ == "__main__":

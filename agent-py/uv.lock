@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10, <3.15"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -19,6 +19,7 @@ dependencies = [
     { name = "livekit-plugins-ai-coustics" },
     { name = "livekit-plugins-minimax" },
     { name = "moss" },
+    { name = "openai" },
     { name = "python-dotenv" },
 ]
 
@@ -35,6 +36,7 @@ requires-dist = [
     { name = "livekit-plugins-ai-coustics", specifier = "~=0.2" },
     { name = "livekit-plugins-minimax", specifier = "~=1.0" },
     { name = "moss", specifier = ">=1.4" },
+    { name = "openai", specifier = ">=1.0" },
     { name = "python-dotenv" },
 ]
 

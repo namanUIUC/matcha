@@ -24,3 +24,10 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Per-call debug snapshots + TS eval-harness reports
+agent-py/debug/
+output/
+
+# Guildly agent workspace (linked project)
+.guildly/

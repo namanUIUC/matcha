@@ -53,6 +53,8 @@ real Convex database, per-caller memory, and a résumé-enrichment pipeline.
 | **Twilio** | Delivers the SMS one-time code for dashboard login (optional in dev) |
 | **Next.js** | Candidate dashboard (`ui/`) + an optional browser debug surface (`frontend/`) |
 
+<img width="573" height="577" alt="matcha_tech" src="https://github.com/user-attachments/assets/218af11a-db34-43d8-a52d-e8607ad1e580" />
+
 ## What's in the repo
 
 - 🎙️ **Matcha agent** (`agent-py/src/agent.py`) — phone-first career interviewer.

@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import textwrap
+import uuid
 from datetime import datetime, timezone
 
 from career_profile import CareerProfile
@@ -34,6 +35,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.plugins import silero
+from moss import DocumentInfo, MossClient, QueryOptions
 
 
 # Register the MiniMax TTS plugin on the MAIN THREAD at import time. LiveKit
@@ -73,6 +75,13 @@ except ImportError:
 
 # Where we drop a per-call debug snapshot (transcript + profile + recs).
 DEBUG_DIR = os.getenv("MATCHA_DEBUG_DIR", "debug")
+
+# Moss memory index: each fact is stored with metadata={"user_id": <phone>}
+# so future calls from the same number can recall what the caller said before.
+MEMORY_INDEX = os.getenv("MOSS_MEMORY_INDEX_NAME", "memory")
+# When the SIP participant attribute is missing (console mode, browser test),
+# fall back to a fixed id so the agent still runs.
+DEFAULT_USER_ID = "matcha-local"
 
 
 def check_required_env() -> None:
@@ -163,15 +172,110 @@ MATCHA_INSTRUCTIONS = textwrap.dedent(
 class Matcha(Agent):
     """The Matcha career interview agent. Holds the in-memory profile."""
 
-    def __init__(self, *, room=None, call_id: str = "local") -> None:
+    def __init__(
+        self,
+        *,
+        room=None,
+        call_id: str = "local",
+        user_id: str = DEFAULT_USER_ID,
+    ) -> None:
         super().__init__(
             llm=inference.LLM(model="openai/gpt-5.2-chat-latest"),
             instructions=MATCHA_INSTRUCTIONS,
         )
         self._room = room
         self._call_id = call_id
+        self._user_id = user_id
         self.profile = CareerProfile()
         self._recommended = False
+
+        # Moss is optional: if credentials are missing, the memory tools no-op
+        # and the rest of the interview still works.
+        moss_project_id = os.getenv("MOSS_PROJECT_ID")
+        moss_project_key = os.getenv("MOSS_PROJECT_KEY")
+        if moss_project_id and moss_project_key:
+            self._moss = MossClient(moss_project_id, moss_project_key)
+        else:
+            self._moss = None
+            logger.warning(
+                "Moss credentials missing — memory tools will no-op for this call."
+            )
+        self._memory_loaded = False
+
+    def set_user_id(self, user_id) -> None:
+        """Update the user identity once we learn the caller's phone number.
+
+        Called from the entrypoint after the SIP participant joins. Tools that
+        index/recall facts use `self._user_id` as the Moss metadata key.
+
+        Defensively rejects non-strings so we never index against a MagicMock or
+        other sentinel produced by the LiveKit CLI's console-mode fake.
+        """
+        if isinstance(user_id, str) and user_id:
+            self._user_id = user_id
+            logger.info("Matcha user_id set to %s", user_id)
+
+    async def _ensure_memory_index_loaded(self) -> None:
+        if self._moss is None or self._memory_loaded:
+            return
+        try:
+            await self._moss.load_index(MEMORY_INDEX)
+            self._memory_loaded = True
+            logger.info("Loaded Moss memory index '%s'", MEMORY_INDEX)
+        except Exception:
+            logger.exception("Failed to load Moss memory index; will retry on use")
+
+    async def load_prior_context(self, top_k: int = 20) -> list[str]:
+        """Pull prior facts about this caller from Moss to bootstrap the call.
+
+        Returns the de-duped, non-empty text of the top-k memory docs scoped to
+        the current `user_id` (i.e. this phone number). Used by the entrypoint
+        to personalize the opening greeting for returning callers.
+        """
+        if self._moss is None:
+            return []
+        await self._ensure_memory_index_loaded()
+        try:
+            result = await self._moss.query(
+                MEMORY_INDEX,
+                "candidate background skills experience preferences career goals",
+                QueryOptions(
+                    top_k=top_k,
+                    filter={
+                        "field": "user_id",
+                        "condition": {"$eq": self._user_id},
+                    },
+                ),
+            )
+        except Exception:
+            logger.exception("Failed to load prior context from Moss")
+            return []
+        docs = getattr(result, "docs", None) or []
+        out: list[str] = []
+        seen: set[str] = set()
+        for d in docs:
+            text = (getattr(d, "text", "") or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                out.append(text)
+        return out
+
+    async def _index_fact(self, fact: str) -> None:
+        """Persist a single fact to the Moss memory index, scoped to this user."""
+        if self._moss is None or not fact:
+            return
+        await self._ensure_memory_index_loaded()
+        try:
+            doc = DocumentInfo(
+                id=f"{self._user_id}-{uuid.uuid4()}",
+                text=fact,
+                metadata={"user_id": self._user_id, "call_id": self._call_id},
+            )
+            await self._moss.add_docs(MEMORY_INDEX, [doc])
+            # Reload so subsequent recalls see this write.
+            await self._moss.load_index(MEMORY_INDEX)
+        except Exception:
+            logger.exception("Failed to index fact to Moss")
 
     # ------------------------------------------------------------------
     # Tools the LLM calls during the interview
@@ -197,6 +301,9 @@ class Matcha(Agent):
         logger.info("Current profile: %s", self.profile.to_json())
         await self._publish_profile()
         self._write_debug_snapshot()
+        # Index the structured fact into the per-caller Moss memory so future
+        # calls from this phone number can recall it via recall_facts.
+        await self._index_fact(f"{field}: {value}")
         return f"Recorded {field}."
 
     @function_tool()
@@ -228,6 +335,55 @@ class Matcha(Agent):
         await self._publish_recommendations(roles, jobs)
         self._write_debug_snapshot(roles=roles, jobs=jobs)
         return speech
+
+    @function_tool()
+    async def remember_fact(self, context: RunContext, fact: str) -> str:
+        """Persist a durable, free-form fact the caller shared.
+
+        Use this on top of `update_profile` when the caller mentions something
+        that doesn't fit a profile field but is worth recalling next time they
+        call (e.g. "moving to Berlin in March", "kid just started school").
+
+        Args:
+            fact: A short, self-contained statement.
+        """
+        await self._index_fact(fact)
+        return "Got it, I'll remember that."
+
+    @function_tool()
+    async def recall_facts(self, context: RunContext, query: str) -> str:
+        """Recall facts this caller shared on previous calls.
+
+        Scoped by the caller's phone number, so the agent only sees what this
+        specific caller said before. Useful at the start of a return call.
+
+        Args:
+            query: What you want to recall about the caller.
+        """
+        if self._moss is None:
+            return "I don't have any memory available right now."
+        await self._ensure_memory_index_loaded()
+        try:
+            result = await self._moss.query(
+                MEMORY_INDEX,
+                query,
+                QueryOptions(
+                    top_k=5,
+                    filter={
+                        "field": "user_id",
+                        "condition": {"$eq": self._user_id},
+                    },
+                ),
+            )
+        except Exception:
+            logger.exception("Moss recall failed")
+            return "I couldn't pull up your history just now."
+        docs = getattr(result, "docs", None) or []
+        facts = [(getattr(d, "text", "") or "").strip() for d in docs]
+        facts = [f for f in facts if f]
+        if not facts:
+            return "I don't have anything remembered for you yet."
+        return "\n".join(facts)
 
     # ------------------------------------------------------------------
     # Debug surfaces: console logs, local JSON file, and data messages
@@ -323,6 +479,11 @@ async def matcha_agent(ctx: JobContext):
     # Use the room name as a stable per-call id for debug snapshots.
     call_id = ctx.room.name or "local"
 
+    # We don't know the caller's phone number yet — it arrives as a SIP
+    # participant attribute after `ctx.connect()`. Start with the fallback id
+    # and update Matcha once the participant joins.
+    matcha = Matcha(room=ctx.room, call_id=call_id)
+
     session = AgentSession(
         # STT via LiveKit Inference (the agent's ears).
         stt=inference.STT(model="deepgram/nova-3", language="multi"),
@@ -334,21 +495,76 @@ async def matcha_agent(ctx: JobContext):
     )
 
     await session.start(
-        agent=Matcha(room=ctx.room, call_id=call_id),
+        agent=matcha,
         room=ctx.room,
         room_options=room_io.RoomOptions(),
     )
 
     await ctx.connect()
 
-    # Matcha opens the call with a fixed greeting so the interview always starts
-    # the same way (deterministic — not left up to the LLM). session.say() speaks
-    # this exact text via TTS. After this, the LLM follows MATCHA_INSTRUCTIONS
-    # and runs the structured interview one question at a time.
-    await session.say(
-        "Hi, I'm Matcha. I help people discover career paths that really fit "
-        "who they are. To get started, can you tell me a little about yourself?"
-    )
+    # Pull the caller's phone number off the SIP participant. Telephony attrs
+    # land on the participant LiveKit injects for the inbound call; without it
+    # (console / browser test) we keep DEFAULT_USER_ID. Once we know who is
+    # calling, hit Moss for anything we recorded on prior calls so the greeting
+    # can recognize returning callers.
+    prior_facts: list[str] = []
+    try:
+        participant = await ctx.wait_for_participant()
+        phone_number = participant.attributes.get("sip.phoneNumber")
+        # In console mode the participant is a MagicMock, so `attributes.get`
+        # also returns a MagicMock — type-check before using it as an id. When
+        # we can't resolve a real phone number we keep DEFAULT_USER_ID so
+        # repeat console sessions still exercise the returning-caller path.
+        if isinstance(phone_number, str) and phone_number:
+            matcha.set_user_id(phone_number)
+    except Exception:
+        logger.exception("Failed to read caller phone number from SIP attributes")
+
+    # Always attempt the recall — for real calls this is filtered to the
+    # phone number; for console mode it uses DEFAULT_USER_ID so prior
+    # console sessions surface as "returning caller" facts.
+    try:
+        prior_facts = await matcha.load_prior_context()
+    except Exception:
+        logger.exception("Failed to load prior context from Moss")
+
+    if prior_facts:
+        # Inject prior knowledge as a system note BEFORE the first turn so the
+        # LLM treats the caller as returning. Skip the questions already covered
+        # and confirm what changed.
+        note = (
+            "This caller has called you before. Here is what you previously "
+            "recorded about them, indexed by their phone number:\n- "
+            + "\n- ".join(prior_facts)
+            + "\n\nDo NOT re-ask for facts above. Briefly acknowledge that you "
+            "remember them, mention one concrete detail to show recognition, "
+            "and ask whether their situation has changed since last time. "
+            "Only ask follow-up interview questions to fill gaps."
+        )
+        new_ctx = matcha.chat_ctx.copy()
+        new_ctx.add_message(role="system", content=note)
+        await matcha.update_chat_ctx(new_ctx)
+        logger.info(
+            "Returning caller %s — loaded %d prior facts from Moss",
+            matcha._user_id,
+            len(prior_facts),
+        )
+        await session.generate_reply(
+            instructions=(
+                "Greet this returning caller warmly in ONE short sentence "
+                "(use their name if you know it), mention one specific detail "
+                "you remember about them to show recognition, then ask in a "
+                "second short sentence whether their situation has changed."
+            )
+        )
+    else:
+        # First-time caller (or no Moss creds) — use the deterministic greeting
+        # so the interview always starts the same way.
+        await session.say(
+            "Hi, I'm Matcha. I help people discover career paths that really "
+            "fit who they are. To get started, can you tell me a little about "
+            "yourself?"
+        )
 
 
 

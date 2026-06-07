@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1
 
-# Use the official UV Python base image with Python 3.14 on Debian Bookworm
-# UV is a fast Python package manager that provides better performance than pip
-# We use the slim variant to keep the image size smaller while still having essential tools
+# Use the official UV Python base image with Python 3.14 on Debian Trixie.
+# Trixie ships glibc 2.41 — required by inferedge-moss-core, whose Linux x86_64
+# wheels only target manylinux_2_38+. The earlier bookworm-slim base (glibc
+# 2.36) fails to install moss for this reason.
 ARG PYTHON_VERSION=3.14
-FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-bookworm-slim AS base
+FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-trixie-slim AS base
 
 # Keeps Python from buffering stdout and stderr to avoid situations where
 # the application crashes without emitting any logs due to buffering.

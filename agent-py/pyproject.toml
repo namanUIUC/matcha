@@ -13,6 +13,7 @@ dependencies = [
     "livekit-plugins-ai-coustics~=0.2",
     "livekit-plugins-minimax~=1.0",
     "python-dotenv",
+    "moss>=1.4",
 ]
 
 [dependency-groups]
@@ -26,6 +27,12 @@ dev = [
 # yarl 1.24.1 was published with only a cp310 wheel and no sdist, so it can't
 # install on Python 3.11+. Remove this once upstream uploads the remaining wheels.
 constraint-dependencies = ["yarl<1.24"]
+# Force uv to resolve packages with wheels compatible with the Docker build
+# target (Debian Bookworm = manylinux_2_36, x86_64). Without this, uv may pick
+# a moss release whose wheels only target newer glibc and fail at install time.
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

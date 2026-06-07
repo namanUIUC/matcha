@@ -26,14 +26,15 @@ from moss import DocumentInfo, MossClient
 # current working directory. ``src/create_index.py`` -> parent.parent == agent-py/.
 AGENT_DIR = Path(__file__).resolve().parent.parent
 KNOWLEDGE_PATH = AGENT_DIR / "knowledge.json"
-ENV_PATH = AGENT_DIR / ".env.local"
 
 DEFAULT_MODEL_ID = "moss-minilm"
 DEFAULT_KNOWLEDGE_INDEX = "knowledge"
 DEFAULT_MEMORY_INDEX = "memory"
 
-# Load environment variables from agent-py/.env.local.
-load_dotenv(ENV_PATH)
+# Load environment variables from .env.local first (local overrides), then .env
+# as a fallback — matching the lookup order in src/agent.py.
+load_dotenv(AGENT_DIR / ".env.local")
+load_dotenv(AGENT_DIR / ".env")
 
 
 def _load_knowledge_documents() -> list[DocumentInfo]:

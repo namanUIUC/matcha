@@ -22,7 +22,7 @@ import re
 from recommendations import JobMatch, load_jobs
 
 # --- Config (env-overridable; mirrors feat/reco) ---------------------------
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_BASE_URL = os.getenv(
     "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
 )
